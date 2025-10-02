@@ -1,0 +1,27 @@
+schema: 1
+id: com.phelia.plugins.jackett
+name: Jackett Connector
+version: 0.1.0
+description: Torznab (Jackett) search provider for Phelia.
+author:
+  name: Erik
+  email: dev@example.com
+license: MIT
+phelia:
+  minVersion: 0.7.0
+  hooks:
+    backend:
+      entrypoint: phelia_jackett:JackettSearchProvider
+runtime:
+  python: '>=3.12,<3.14'
+  settingsSchema:
+    type: object
+    properties:
+      base_url:
+        type: string
+        default: http://jackett:9117/api/v2.0/indexers/all/results/torznab
+      api_key:
+        type: string
+        default: ''
+integrity:
+  sha256: 682efddca12e2e7f9d72707542cf89d4a86be7862ad76c247a6534052e5b7015

@@ -1,0 +1,7 @@
+network:
+  outbound: ["jackett", "jackett:9117", "localhost", "127.0.0.1"]
+  inbound: []
+filesystem:
+  read: []
+  write: []
+env: []
