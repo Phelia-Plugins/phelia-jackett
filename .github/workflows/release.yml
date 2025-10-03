@@ -1,0 +1,100 @@
+name: Release Jackett Plugin
+on:
+  push:
+    tags: ["v*.*.*"]  # запускается при пуше тега vX.Y.Z
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -U pip pyyaml
+
+      # Собираем .phex из папки plugin/ (без записи sha внутрь архива)
+      - name: Build .phex
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python - <<'PY'
+import tarfile, hashlib, pathlib, tempfile
+plugin_dir = pathlib.Path("plugin").resolve()
+out = pathlib.Path("dist/phelia-jackett.phex").resolve()
+
+def sha256_file(p: pathlib.Path):
+    import hashlib
+    h=hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024*1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+with tempfile.TemporaryDirectory() as td:
+    tmp = pathlib.Path(td)/out.name
+    with tarfile.open(tmp, "w:gz") as tar:
+        for p in plugin_dir.rglob("*"):
+            if p.is_symlink():
+                raise SystemExit(f"Refusing symlink: {p}")
+            tar.add(p, arcname=str(p.relative_to(plugin_dir)))
+    digest = sha256_file(tmp)
+    out.write_bytes(tmp.read_bytes())
+print(digest)
+PY
+          echo "sha256=$(tail -n1)" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release (uploads .phex)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/phelia-jackett.phex
+
+      - name: Compute index payload
+        id: payload
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.build.outputs.sha256 }}"
+          TAG="${GITHUB_REF_NAME}"  # v1.0.0
+          python - <<'PY'
+import json, os, pathlib, tarfile, tempfile, yaml
+phex = pathlib.Path("dist/phelia-jackett.phex").resolve()
+with tarfile.open(phex,"r:gz") as tar, tempfile.TemporaryDirectory() as td:
+    tar.extractall(td)
+    data = yaml.safe_load((pathlib.Path(td)/"phelia.yaml").read_text(encoding="utf-8"))
+
+pid  = data["id"]
+name = data.get("name", pid)
+ver  = os.environ["TAG"]               # "v1.0.0"
+sha  = os.environ["SHA"]
+repo = os.environ["GITHUB_REPOSITORY"] # Phelia-plugins/phelia-jackett
+
+url = f"https://github.com/{repo}/releases/download/{ver}/phelia-jackett.phex"
+
+print(json.dumps({"id":pid,"name":name,"version":ver,"url":url,"sha256":sha}, indent=2))
+PY
+          } > dist/payload.json
+
+      # Шлём событие в центральный индекс
+      - name: Notify central index
+        env:
+          DISPATCH_TOKEN: ${{ secrets.INDEX_PAT }}   # PAT с доступом на repo Phelia-plugins/plugins-index
+        run: |
+          set -euo pipefail
+          curl -s -X POST \
+            -H "Authorization: token ${DISPATCH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Phelia-plugins/plugins-index/dispatches \
+            -d @- <<JSON
+          {
+            "event_type": "plugin_released",
+            "client_payload": $(cat dist/payload.json)
+          }
+JSON
+
